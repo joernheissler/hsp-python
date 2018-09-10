@@ -2,6 +2,7 @@ import trio
 import attr
 
 from . import messages, queue
+from .stream import BufferedReceiver
 
 
 class HspClosed(Exception):
@@ -57,6 +58,8 @@ class HspConnection:
         # Queue of outgoing messages
         self._send_queue = queue.SendQueue()
 
+        self._receiver = BufferedReceiver(self.stream)
+
     async def run(self):
         try:
             async with self.stream, trio.open_nursery() as nursery:
@@ -78,7 +81,7 @@ class HspConnection:
         cmd_limit = max(types) + 1
 
         while True:
-            cmd = await self.receiver.receive_varint(cmd_limit)
+            cmd = await self._receiver.receive_varint(cmd_limit)
             msg = await types[cmd].receive(self)
             msg.handle()
 
@@ -110,7 +113,7 @@ class HspConnection:
 
                 msg.write(buf)
 
-            await self.stream.write_all(buf)
+            await self.stream.send_all(buf)
 
         # Shuts down the nursery and closes the stream.
         # XXX cancel the nursery?

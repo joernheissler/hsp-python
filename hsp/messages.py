@@ -1,6 +1,7 @@
 import trio
 import attr
 from .stream import attr_varint, attr_bytearray, write_varint
+from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage
 
 
 @attr.s(cmp=False)
@@ -42,14 +43,17 @@ class HspMessage:
 
     @classmethod
     async def receive(cls, hsp):
-        return cls(hsp, *[
-            await recvfunc(hsp.receiver, getattr(hsp, limit_var))
-            for __, limit_var, recvfunc, __ in cls._fields()
-        ])
+        try:
+            return cls(hsp, *[
+                await recvfunc(hsp._receiver, getattr(hsp, limit_var))
+                for __, limit_var, recvfunc, __ in cls._fields()
+            ])
+        except EOFError as ex:
+            raise IncompleteMessage() from ex
 
     def write(self, buf):
-        if self.cancelled:
-            return
+       #if self.cancelled:
+       #    return
 
         write_varint(buf, self.CMD)
         for name, __, __, writefunc in self._fields():
@@ -88,7 +92,7 @@ class HspMessage:
         try:
             await self._sent.wait()
         except trio.Cancelled:
-            self.cancel_scope.cancel()
+            self._cancel_send.cancel()
         return self._response
 
     def set_response(self, msg):
@@ -116,12 +120,12 @@ class Data(HspMessage):
     payload = attr_bytearray('max_data')
     prio = attr.ib(default=0)
 
-    def handle(self, msg):
-        self.hsp.nursery.start_soon(self.recv_task, msg)
+    def handle(self):
+        self.hsp.nursery.start_soon(self.recv_task)
 
-    async def recv_task(self, msg):
+    async def recv_task(self):
         if self.hsp.on_data:
-            await self.hsp.on_data(msg)
+            await self.hsp.on_data(self)
 
 
 @attr.s(cmp=False)
@@ -141,14 +145,14 @@ class DataAck(HspMessage):
     def unregister(self):
         self.hsp._data_queue.pop(self)
 
-    def handle(self, msg):
-        self.hsp.nursery.start_soon(self.recv_task, msg)
+    def handle(self):
+        self.hsp.nursery.start_soon(self.recv_task)
 
-    async def recv_task(self, msg):
+    async def recv_task(self):
         if self.hsp.on_data:
-            await self.hsp.on_data(msg)
+            await self.hsp.on_data(self)
 
-        Ack(self.hsp, msg.msg_id).send()
+        Ack(self.hsp, self.msg_id).send()
 
 
 @attr.s(cmp=False)
@@ -158,8 +162,12 @@ class Ack(HspMessage):
 
     msg_id = attr_varint('max_msg_id')
 
-    def handle(self, msg):
-        self.hsp._data_queue.get(msg.msg_id).set_response(msg)
+    def handle(self):
+        try:
+            msg = self.hsp._data_queue.get(self.msg_id)
+        except KeyError as ex:
+            raise UnexpectedAck(self.msg_id) from ex
+        msg.set_response(self)
 
 
 @attr.s(cmp=False)
@@ -171,8 +179,12 @@ class Error(HspMessage):
     error_code = attr_varint('max_error_code')
     error = attr_bytearray('max_error_length')
 
-    def handle(self, msg):
-        self.hsp._data_queue.get(msg.msg_id).set_response(msg)
+    def handle(self):
+        try:
+            msg = self.hsp._data_queue.get(self.msg_id)
+        except KeyError as ex:
+            raise UnexpectedAck(self.msg_id) from ex
+        msg.set_response(self)
 
 
 @attr.s(cmp=False)
@@ -185,14 +197,14 @@ class Ping(HspMessage):
         self.hsp._ping_queue.add(self)
 
     def unregister(self):
-        self.hsp._ping_queue.pop(self)
+        self.hsp._ping_queue.remove(self)
 
-    def handle(self, msg):
-        self.hsp.nursery.start_soon(self.recv_task, msg)
+    def handle(self):
+        self.hsp.nursery.start_soon(self.recv_task)
 
-    async def recv_task(self, msg):
+    async def recv_task(self):
         if self.hsp.on_ping:
-            await self.hsp.on_ping(msg)
+            await self.hsp.on_ping(self)
 
         Pong(self.hsp).send()
 
@@ -202,8 +214,12 @@ class Pong(HspMessage):
     CMD = 5
     PRIO = 0
 
-    def handle(self, msg):
-        self.hsp._ping_queue.get().set_response(msg)
+    def handle(self):
+        try:
+            msg = self.hsp._ping_queue.get()
+        except IndexError as ex:
+            raise UnexpectedPong() from ex
+        msg.set_response(self)
 
 
 @attr.s(cmp=False)
@@ -213,5 +229,9 @@ class ErrorUndef(HspMessage):
 
     msg_id = attr_varint('max_msg_id')
 
-    def handle(self, msg):
-        self.hsp._data_queue.get(msg.msg_id).set_response(msg)
+    def handle(self):
+        try:
+            msg = self.hsp._data_queue.get(self.msg_id)
+        except KeyError as ex:
+            raise UnexpectedAck(self.msg_id) from ex
+        msg.set_response(self)

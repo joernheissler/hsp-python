@@ -12,3 +12,11 @@ class CodingError(ProtocolError):
 
 class IncompleteMessage(ProtocolError):
     pass
+
+
+class UnexpectedPong(ProtocolError):
+    pass
+
+
+class UnexpectedAck(ProtocolError):
+    pass
