@@ -60,7 +60,7 @@ class DataQueue:
             raise Exception('Cannot add a message with a message ID')
 
         msg.msg_id = self.get_unused_id()
-        self._queue[msg_id] = msg
+        self._queue[msg.msg_id] = msg
 
     def pop(self, msg):
         return self._queue.pop(msg.msg_id)
@@ -81,6 +81,6 @@ class DataQueue:
             raise Exception('Too few Message IDs available')
 
         while True:
-            msg_id = randint(0, max_id - 1)
+            msg_id = randint(0, id_limit - 1)
             if msg_id not in self._queue:
                 return msg_id

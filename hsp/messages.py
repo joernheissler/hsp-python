@@ -1,3 +1,4 @@
+import trio
 import attr
 from .stream import attr_varint, attr_bytearray, write_varint
 
@@ -157,7 +158,7 @@ class Ack(HspMessage):
 
     msg_id = attr_varint('max_msg_id')
 
-    def handle(self):
+    def handle(self, msg):
         self.hsp._data_queue.get(msg.msg_id).set_response(msg)
 
 
@@ -170,7 +171,7 @@ class Error(HspMessage):
     error_code = attr_varint('max_error_code')
     error = attr_bytearray('max_error_length')
 
-    def handle(self):
+    def handle(self, msg):
         self.hsp._data_queue.get(msg.msg_id).set_response(msg)
 
 
@@ -193,7 +194,7 @@ class Ping(HspMessage):
         if self.hsp.on_ping:
             await self.hsp.on_ping(msg)
 
-        messages.Pong(self.hsp).send()
+        Pong(self.hsp).send()
 
 
 @attr.s(cmp=False)

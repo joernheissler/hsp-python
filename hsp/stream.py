@@ -1,6 +1,9 @@
 import trio
+import attr
 
 from typing import Union
+
+from .exception import LimitBreached, IncompleteMessage, CodingError
 
 
 class BufferedReceiver:
@@ -13,7 +16,7 @@ class BufferedReceiver:
             await trio.sleep(0)
         else:
             while len(self.buf) < size:
-                await self._receive_more():
+                await self._receive_more()
 
         result = self.buf[:size]
         del self.buf[:size]

@@ -1,8 +1,8 @@
 import trio
 import attr
-from random import randint
 
 from . import messages, queue
+
 
 class HspClosed(Exception):
     pass
