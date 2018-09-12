@@ -122,7 +122,10 @@ class Data(HspMessage):
     async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
         task_status.started()
         if self.hsp.on_data:
-            await self.hsp.on_data(self.msg_type, self.payload, None)
+            try:
+                await self.hsp.on_data(self.msg_type, self.payload, None)
+            except DataError:
+                pass
 
 
 @attr.s(cmp=False)
@@ -148,7 +151,14 @@ class DataAck(HspMessage):
     async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
         task_status.started()
         if self.hsp.on_data:
-            await self.hsp.on_data(self.msg_type, self.payload, self.msg_id)
+            try:
+                await self.hsp.on_data(self.msg_type, self.payload, self.msg_id)
+            except DataError as err:
+                if err.error_code is None:
+                    await ErrorUndef(self.hsp, self.msg_id).send()
+                else:
+                    await Error(self.hsp, self.msg_id, err.error_code, err.error).send()
+                return
 
         await Ack(self.hsp, self.msg_id).send()
 
