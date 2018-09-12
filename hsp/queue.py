@@ -10,15 +10,18 @@ class SendQueue:
         self._queue = []
         self._counter = 0
 
-    def put_nowait(self, prio, item):
+    def put(self, prio, item):
         heappush(self._queue, (prio, self._counter, item))
         self._counter += 1
         if not self._not_empty.is_set():
             self._not_empty.set()
 
-    def get_nowait(self):
+    def __iter__(self):
+        return self
+
+    def __next__(self):
         if not self._not_empty.is_set():
-            raise trio.WouldBlock()
+            raise StopIteration()
 
         __, __, item = heappop(self._queue)
 
@@ -27,13 +30,8 @@ class SendQueue:
 
         return item
 
-    async def get(self):
-        while True:
-            await self._not_empty.wait()
-            try:
-                return self.get_nowait()
-            except trio.WouldBlock:
-                pass
+    async def wait_nonempty(self):
+        await self._not_empty.wait()
 
 
 class PingQueue:
@@ -59,7 +57,7 @@ class DataQueue:
         if msg.msg_id is not None:
             raise Exception('Cannot add a message with a message ID')
 
-        msg.msg_id = self.get_unused_id()
+        msg.msg_id = self._get_unused_id()
         self._queue[msg.msg_id] = msg
 
     def pop(self, msg):
@@ -68,14 +66,14 @@ class DataQueue:
     def get(self, msg_id):
         return self._queue[msg_id]
 
-    def get_unused_id(self):
+    def _get_unused_id(self):
         """
         Get an unused message id for a DATA_ACK message.
 
         This generates random numbers until an unused one is found.
         For each try, the probability to find an unused ID is at least 25% and usually > 50%.
         """
-        id_limit = min(self.max_msg_id, len(self._queue) * 2 + 1)
+        id_limit = min(self._max_msg_id, len(self._queue) * 2 + 1)
 
         if len(self._queue) / id_limit > 0.75:
             raise Exception('Too few Message IDs available')

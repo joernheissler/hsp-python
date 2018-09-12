@@ -1,12 +1,8 @@
 import trio
 import attr
 
-from . import messages, queue
+from . import messages, queue, exception
 from .stream import BufferedReceiver
-
-
-class HspClosed(Exception):
-    pass
 
 
 @attr.s(repr=False, cmp=False)
@@ -45,7 +41,7 @@ class HspConnection:
     # Timeout waiting for PONG before connection is terminated.
     ping_timeout = attr.ib(default=120)
 
-    # Number of bytes to send out at the same time; smaller messages are concatenated, larger messages are split.
+    # Number of bytes to send out at the same time; small messages are concatenated until the size is reached.
     writer_chunk_size = attr.ib(default=4096)
 
     def __attrs_post_init__(self):
@@ -60,21 +56,25 @@ class HspConnection:
 
         self._receiver = BufferedReceiver(self.stream)
 
-    async def run(self):
+    async def run(self, *, task_status=trio.TASK_STATUS_IGNORED):
         try:
             async with self.stream, trio.open_nursery() as nursery:
                 self.nursery = nursery
                 nursery.start_soon(self._child_ping)
                 nursery.start_soon(self._child_recv)
                 nursery.start_soon(self._child_send)
-        finally:
-            pass
+                task_status.started()
+        except trio.BrokenStreamError as ex:
+            raise exception.NetworkError(str(ex)) from ex
 
     async def _child_ping(self):
-        while True:
-            await trio.sleep(self.ping_interval)
-            with trio.fail_after(self.ping_timeout):
-                await self.ping().wait_sent()
+        try:
+            while True:
+                await trio.sleep(self.ping_interval)
+                with trio.fail_after(self.ping_timeout):
+                    await self.ping()
+        except trio.TooSlowError as ex:
+            raise exception.PingTimeout() from ex
 
     async def _child_recv(self):
         types = messages.HspMessage.get_types()
@@ -83,53 +83,34 @@ class HspConnection:
         while True:
             cmd = await self._receiver.receive_varint(cmd_limit)
             msg = await types[cmd].receive(self)
-            msg.handle()
+            await msg.handle()
 
     async def _child_send(self):
-        quit = False
-
-        while not quit:
+        while True:
             buf = bytearray()
 
             # Wait until there might be space on the Stream.
             # This gives higher priority messages a chance to get sent earlier.
             await self.stream.wait_send_all_might_not_block()
+            await self._send_queue.wait_nonempty()
 
-            while not buf:
-                msg = await self._send_queue.get()
-                if not msg:
+            for writefunc in self._send_queue:
+                writefunc(buf)
+
+                if len(buf) >= self.writer_chunk_size:
                     break
-                msg.write(buf)
-
-            while len(buf) < self.writer_chunk_size:
-                try:
-                    msg = self._send_queue.get_nowait()
-                except trio.WouldBlock:
-                    break
-
-                if not msg:
-                    quit = True
-                    break
-
-                msg.write(buf)
 
             await self.stream.send_all(buf)
-
-        # Shuts down the nursery and closes the stream.
-        # XXX cancel the nursery?
-        raise HspClosed()
-
-    def disconnect(self):
-        self._send_queue.put_nowait(None)
 
     def close(self):
         self.nursery.cancel_scope.cancel()
 
-    def send(self, msg_type, payload, req_ack=False, prio=0):
+    async def send(self, msg_type, payload, req_ack=False, prio=0, *, task_status=trio.TASK_STATUS_IGNORED):
         if req_ack:
-            return messages.DataAck(self, None, msg_type, payload, prio).send()
+            msg = messages.DataAck(self, None, msg_type, payload, prio)
         else:
-            return messages.Data(self, msg_type, payload, prio).send()
+            msg = messages.Data(self, msg_type, payload, prio)
+        return await msg.send(task_status)
 
-    def ping(self):
-        return messages.Ping(self).send()
+    async def ping(self, *, task_status=trio.TASK_STATUS_IGNORED):
+        return await messages.Ping(self).send(task_status)

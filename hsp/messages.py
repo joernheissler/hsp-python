@@ -1,7 +1,8 @@
+import outcome
 import trio
 import attr
 from .stream import attr_varint, attr_bytearray, write_varint
-from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage
+from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage, DataError
 
 
 @attr.s(cmp=False)
@@ -10,6 +11,8 @@ class HspMessage:
     prio = 0
 
     hsp = attr.ib()
+
+    _sender = None
 
     @classmethod
     def get_types(cls):
@@ -51,63 +54,56 @@ class HspMessage:
         except EOFError as ex:
             raise IncompleteMessage() from ex
 
-    def write(self, buf):
-       #if self.cancelled:
-       #    return
+    def _write(self, buf):
+        if self._written.is_set():
+            raise Exception('Already written')
+        self._written.set()
 
         write_varint(buf, self.CMD)
         for name, __, __, writefunc in self._fields():
             writefunc(buf, getattr(self, name))
 
-        self._written.set()
+    async def send(self, task_status=trio.TASK_STATUS_IGNORED):
+        if hasattr(self, '_sent'):
+            raise Exception('Already sent')
 
-    def send(self):
-        self.register()
-        self._response = None
-        self.hsp._send_queue.put_nowait((self.PRIO, self.prio), self)
-        self._written = trio.Event()
-        if self.NEED_RESP:
-            self._responded = trio.Event()
         self._sent = trio.Event()
-        self.hsp.nursery.start_soon(self._send_task)
-        return self
+        self._written = trio.Event()
+        self._responded = trio.Event()
 
-    async def _send_task(self):
-        # XXX fix cancellation
+        self._prepare_send()
         try:
-            with trio.open_cancel_scope() as cancel_scope:
-                self._cancel_send = cancel_scope
-                await self._written.wait()
+            await self.hsp.nursery.start(self._send_task)
+            self.hsp._send_queue.put((self.PRIO, self.prio), self._write)
+            task_status.started()
+            await self._sent.wait()
+            return self._response.unwrap()
+        finally:
+            self._finish_send()
+
+    async def _send_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
+        try:
+            task_status.started()
+            await self._written.wait()
             if self.NEED_RESP:
                 await self._responded.wait()
-        except trio.Cancelled:
-            # Don't shut down the nursery!
-            pass
+            else:
+                self._response = outcome.Value(None)
+        except trio.Cancelled as ex:
+            self._response = outcome.Error(ex)
+            raise
         finally:
-            self.unregister()
             self._sent.set()
 
-    async def wait_sent(self):
-        # XXX fix cancellation
-        try:
-            await self._sent.wait()
-        except trio.Cancelled:
-            self._cancel_send.cancel()
-        return self._response
-
-    def set_response(self, msg):
-        self._response = msg
+    def _set_response(self, response):
+        self._response = response
         self._responded.set()
 
-    def register(self):
-        """
-        Overwritten by child classes to somehow register themselves.
-        """
+    def _prepare_send(self):
+        """Overwritten by child classes to somehow register themselves."""
 
-    def unregister(self):
-        """
-        Overwritten by child classes to somehow unregister themselves.
-        """
+    def _finish_send(self):
+        """Overwritten by child classes to somehow finish themselves."""
 
 
 @attr.s(cmp=False)
@@ -120,12 +116,13 @@ class Data(HspMessage):
     payload = attr_bytearray('max_data')
     prio = attr.ib(default=0)
 
-    def handle(self):
-        self.hsp.nursery.start_soon(self.recv_task)
+    async def handle(self):
+        await self.hsp.nursery.start(self._recv_task)
 
-    async def recv_task(self):
+    async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
+        task_status.started()
         if self.hsp.on_data:
-            await self.hsp.on_data(self)
+            await self.hsp.on_data(self.msg_type, self.payload, None)
 
 
 @attr.s(cmp=False)
@@ -139,20 +136,21 @@ class DataAck(HspMessage):
     payload = attr_bytearray('max_data')
     prio = attr.ib(default=0)
 
-    def register(self):
+    def _prepare_send(self):
         self.hsp._data_queue.add(self)
 
-    def unregister(self):
+    def _finish_send(self):
         self.hsp._data_queue.pop(self)
 
-    def handle(self):
-        self.hsp.nursery.start_soon(self.recv_task)
+    async def handle(self):
+        await self.hsp.nursery.start(self._recv_task)
 
-    async def recv_task(self):
+    async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
+        task_status.started()
         if self.hsp.on_data:
-            await self.hsp.on_data(self)
+            await self.hsp.on_data(self.msg_type, self.payload, self.msg_id)
 
-        Ack(self.hsp, self.msg_id).send()
+        await Ack(self.hsp, self.msg_id).send()
 
 
 @attr.s(cmp=False)
@@ -162,12 +160,12 @@ class Ack(HspMessage):
 
     msg_id = attr_varint('max_msg_id')
 
-    def handle(self):
+    async def handle(self):
         try:
             msg = self.hsp._data_queue.get(self.msg_id)
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
-        msg.set_response(self)
+        msg._set_response(outcome.Value(None))
 
 
 @attr.s(cmp=False)
@@ -179,12 +177,12 @@ class Error(HspMessage):
     error_code = attr_varint('max_error_code')
     error = attr_bytearray('max_error_length')
 
-    def handle(self):
+    async def handle(self):
         try:
             msg = self.hsp._data_queue.get(self.msg_id)
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
-        msg.set_response(self)
+        msg._set_response(outcome.Error(DataError(self.error_code, self.error)))
 
 
 @attr.s(cmp=False)
@@ -193,20 +191,21 @@ class Ping(HspMessage):
     PRIO = 0
     NEED_RESP = True
 
-    def register(self):
+    def _prepare_send(self):
         self.hsp._ping_queue.add(self)
 
-    def unregister(self):
+    def _finish_send(self):
         self.hsp._ping_queue.remove(self)
 
-    def handle(self):
-        self.hsp.nursery.start_soon(self.recv_task)
+    async def handle(self):
+        await self.hsp.nursery.start(self._recv_task)
 
-    async def recv_task(self):
+    async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
+        task_status.started()
         if self.hsp.on_ping:
-            await self.hsp.on_ping(self)
+            await self.hsp.on_ping()
 
-        Pong(self.hsp).send()
+        await Pong(self.hsp).send()
 
 
 @attr.s(cmp=False)
@@ -214,12 +213,13 @@ class Pong(HspMessage):
     CMD = 5
     PRIO = 0
 
-    def handle(self):
+    async def handle(self):
         try:
             msg = self.hsp._ping_queue.get()
         except IndexError as ex:
             raise UnexpectedPong() from ex
-        msg.set_response(self)
+
+        msg._set_response(outcome.Value(None))
 
 
 @attr.s(cmp=False)
@@ -229,9 +229,10 @@ class ErrorUndef(HspMessage):
 
     msg_id = attr_varint('max_msg_id')
 
-    def handle(self):
+    async def handle(self):
         try:
             msg = self.hsp._data_queue.get(self.msg_id)
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
-        msg.set_response(self)
+
+        msg._set_response(outcome.Error(DataError()))
