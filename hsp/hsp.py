@@ -24,7 +24,7 @@ class HspConnection:
     max_type = attr.ib(default=1 << 16)
 
     # Maximum length of received payload.
-    max_data = attr.ib(default=(1 << 24))
+    max_data = attr.ib(default=(1 << 20))
 
     # Maximum message ID.
     max_msg_id = attr.ib(default=(1 << 128))
@@ -44,6 +44,9 @@ class HspConnection:
     # Number of bytes to send out at the same time; small messages are concatenated until the size is reached.
     writer_chunk_size = attr.ib(default=4096)
 
+    # Receive queue size
+    receive_queue_size = attr.ib(default=64)
+
     def __attrs_post_init__(self):
         # Queue of PINGs that are still waiting for a PONG.
         self._ping_queue = queue.PingQueue()
@@ -55,6 +58,8 @@ class HspConnection:
         self._send_queue = queue.SendQueue()
 
         self._receiver = BufferedReceiver(self.stream)
+
+        self.received_data = trio.Queue(self.receive_queue_size)
 
     async def run(self, *, task_status=trio.TASK_STATUS_IGNORED):
         try:

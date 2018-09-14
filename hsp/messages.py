@@ -117,15 +117,13 @@ class Data(HspMessage):
     prio = attr.ib(default=0)
 
     async def handle(self):
-        await self.hsp.nursery.start(self._recv_task)
+        await self.hsp.received_data.put(self)
 
-    async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
-        task_status.started()
-        if self.hsp.on_data:
-            try:
-                await self.hsp.on_data(self.msg_type, self.payload, None)
-            except DataError:
-                pass
+    async def send_ack(self):
+        pass
+
+    async def send_error(self, error):
+        pass
 
 
 @attr.s(cmp=False)
@@ -146,21 +144,16 @@ class DataAck(HspMessage):
         self.hsp._data_queue.pop(self)
 
     async def handle(self):
-        await self.hsp.nursery.start(self._recv_task)
+        await self.hsp.received_data.put(self)
 
-    async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
-        task_status.started()
-        if self.hsp.on_data:
-            try:
-                await self.hsp.on_data(self.msg_type, self.payload, self.msg_id)
-            except DataError as err:
-                if err.error_code is None:
-                    await ErrorUndef(self.hsp, self.msg_id).send()
-                else:
-                    await Error(self.hsp, self.msg_id, err.error_code, err.error).send()
-                return
+    async def send_ack(self):
+        return await Ack(self.hsp, self.msg_id).send()
 
-        await Ack(self.hsp, self.msg_id).send()
+    async def send_error(self, error):
+        if error.error_code is None:
+            await ErrorUndef(self.hsp, self.msg_id).send()
+        else:
+            await Error(self.hsp, self.msg_id, error.error_code, error.error).send()
 
 
 @attr.s(cmp=False)
