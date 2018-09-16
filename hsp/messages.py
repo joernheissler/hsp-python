@@ -1,10 +1,41 @@
-import outcome
 import trio
 import attr
 from .stream import attr_varint, attr_bytearray, write_varint
-from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage, DataError
+from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage
 
-from typing import Optional
+from typing import Optional, Union
+
+
+class Future:
+    def __init__(self):
+        self._done = trio.Event()
+        self._result = None
+        self._error = None
+
+    async def wait(self):
+        await self._done.wait()
+
+        if self._error:
+            raise self._error
+        else:
+            return self._result
+
+    def __await__(self):
+        return self.wait().__await__()
+
+    def set_result(self, result=None):
+        if self._done.is_set():
+            return
+
+        self._done.set()
+        self._result = result
+
+    def set_error(self, error):
+        if self._done.is_set():
+            return
+
+        self._done.set()
+        self._error = error
 
 
 @attr.s(cmp=False)
@@ -57,49 +88,35 @@ class HspMessage:
             raise IncompleteMessage() from ex
 
     def _write(self, buf):
-        if self._written.is_set():
-            raise Exception('Already written')
-        self._written.set()
-
         write_varint(buf, self.CMD)
         for name, __, __, writefunc in self._fields():
             writefunc(buf, getattr(self, name))
+        self._written.set_result()
+        if not self.NEED_RESP:
+            self._send_result.set_result()
 
-    async def send(self, task_status=trio.TASK_STATUS_IGNORED):
-        if hasattr(self, '_sent'):
-            raise Exception('Already sent')
+    def send(self):
+        if self._send_result:
+            raise RuntimeError('Already sent')
 
-        self._sent = trio.Event()
-        self._written = trio.Event()
-        self._responded = trio.Event()
+        self._send_result = Future()
+        self._written = Future()
+        self.hsp.nursery.start_soon(self._send_task)
+        return self._send_result
 
+    async def _send_task(self):
         self._prepare_send()
         try:
-            await self.hsp.nursery.start(self._send_task)
             self.hsp._send_queue.put((self.PRIO, self.prio), self._write)
-            task_status.started()
-            await self._sent.wait()
-            return self._response.unwrap()
+            await self._written
+            await self._send_result
+        except BaseException as ex:
+            self._send_result.set_error(ex)
         finally:
             self._finish_send()
 
-    async def _send_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
-        try:
-            task_status.started()
-            await self._written.wait()
-            if self.NEED_RESP:
-                await self._responded.wait()
-            else:
-                self._response = outcome.Value(None)
-        except trio.Cancelled as ex:
-            self._response = outcome.Error(ex)
-            raise
-        finally:
-            self._sent.set()
-
     def _set_response(self, response):
-        self._response = response
-        self._responded.set()
+        self._send_result.set_result(response)
 
     def _prepare_send(self):
         """Overwritten by child classes to somehow register themselves."""
@@ -153,9 +170,9 @@ class DataAck(HspMessage):
 
     def send_error(self, error_code: Optional[int]=None, error_data: Optional[Union[bytes, bytearray]]=None):
         if error_code is None:
-            ErrorUndef(self.hsp, self.msg_id).send()
+            return ErrorUndef(self.hsp, self.msg_id).send()
         else:
-            Error(self.hsp, self.msg_id, error_code, error_data).send()
+            return Error(self.hsp, self.msg_id, error_code, error_data).send()
 
 
 @attr.s(cmp=False)
@@ -203,14 +220,7 @@ class Ping(HspMessage):
         self.hsp._ping_queue.remove(self)
 
     async def handle(self):
-        await self.hsp.nursery.start(self._recv_task)
-
-    async def _recv_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
-        task_status.started()
-        if self.hsp.on_ping:
-            await self.hsp.on_ping()
-
-        await Pong(self.hsp).send()
+        Pong(self.hsp).send()
 
 
 @attr.s(cmp=False)

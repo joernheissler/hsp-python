@@ -43,7 +43,7 @@ class HspConnection:
         # Map from msg_id to DataAck messages that are waiting for a reply.
         self._data_queue = queue.DataQueue(self.max_msg_id)
 
-        # Queue of outgoing messages
+        # Priority queue of outgoing messages  XXX should be bounded to prevent DoS with PINGs or DATA_ACKs.
         self._send_queue = queue.SendQueue()
 
         self._receiver = BufferedReceiver(self.stream)
@@ -60,6 +60,9 @@ class HspConnection:
                 task_status.started()
         except trio.BrokenStreamError as ex:
             raise exception.NetworkError(str(ex)) from ex
+        finally:
+            pass
+            # XXX cleanup
 
     async def _child_ping(self):
         try:
@@ -99,12 +102,17 @@ class HspConnection:
     def close(self):
         self.nursery.cancel_scope.cancel()
 
-    async def send(self, msg_type, payload, req_ack=False, prio=0, *, task_status=trio.TASK_STATUS_IGNORED):
+    async def send(self, msg_type, payload, req_ack=False, prio=0):
+        """
+        Enqueue a data message. This may block until the output queue got space.
+        XXX Implement this blocking behaviour.
+        """
         if req_ack:
             msg = messages.DataAck(self, None, msg_type, payload, prio)
         else:
             msg = messages.Data(self, msg_type, payload, prio)
-        return await msg.send(task_status)
+
+        return msg.send()
 
     async def ping(self, *, task_status=trio.TASK_STATUS_IGNORED):
         return await messages.Ping(self).send(task_status)

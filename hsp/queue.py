@@ -20,7 +20,7 @@ class SendQueue:
         return self
 
     def __next__(self):
-        if not self._not_empty.is_set():
+        if not self._queue:
             raise StopIteration()
 
         __, __, item = heappop(self._queue)
