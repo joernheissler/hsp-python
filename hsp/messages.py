@@ -4,6 +4,8 @@ import attr
 from .stream import attr_varint, attr_bytearray, write_varint
 from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage, DataError
 
+from typing import Optional
+
 
 @attr.s(cmp=False)
 class HspMessage:
@@ -146,14 +148,14 @@ class DataAck(HspMessage):
     async def handle(self):
         await self.hsp.received_data.put(self)
 
-    async def send_ack(self):
-        return await Ack(self.hsp, self.msg_id).send()
+    def send_ack(self):
+        return Ack(self.hsp, self.msg_id).send()
 
-    async def send_error(self, error):
-        if error.error_code is None:
-            await ErrorUndef(self.hsp, self.msg_id).send()
+    def send_error(self, error_code: Optional[int]=None, error_data: Optional[Union[bytes, bytearray]]=None):
+        if error_code is None:
+            ErrorUndef(self.hsp, self.msg_id).send()
         else:
-            await Error(self.hsp, self.msg_id, error.error_code, error.error).send()
+            Error(self.hsp, self.msg_id, error_code, error_data).send()
 
 
 @attr.s(cmp=False)
@@ -168,7 +170,7 @@ class Ack(HspMessage):
             msg = self.hsp._data_queue.get(self.msg_id)
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
-        msg._set_response(outcome.Value(None))
+        msg._set_response(None)
 
 
 @attr.s(cmp=False)
@@ -178,14 +180,14 @@ class Error(HspMessage):
 
     msg_id = attr_varint('max_msg_id')
     error_code = attr_varint('max_error_code')
-    error = attr_bytearray('max_error_length')
+    error_data = attr_bytearray('max_error_length')
 
     async def handle(self):
         try:
             msg = self.hsp._data_queue.get(self.msg_id)
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
-        msg._set_response(outcome.Error(DataError(self.error_code, self.error)))
+        msg._set_response(self)
 
 
 @attr.s(cmp=False)
@@ -222,13 +224,15 @@ class Pong(HspMessage):
         except IndexError as ex:
             raise UnexpectedPong() from ex
 
-        msg._set_response(outcome.Value(None))
+        msg._set_response(None)
 
 
 @attr.s(cmp=False)
 class ErrorUndef(HspMessage):
     CMD = 6
     PRIO = 1
+    error_code = None
+    error_data = None
 
     msg_id = attr_varint('max_msg_id')
 
@@ -238,4 +242,4 @@ class ErrorUndef(HspMessage):
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
 
-        msg._set_response(outcome.Error(DataError()))
+        msg._set_response(self)

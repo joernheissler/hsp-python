@@ -11,7 +11,7 @@ class BufferedReceiver:
         self.stream = stream
         self.buf = bytearray()
 
-    async def receive_exactly(self, size):
+    async def receive_exactly(self, size: int) -> bytearray:
         if len(self.buf) >= size:
             await trio.sleep(0)
         else:
@@ -22,7 +22,7 @@ class BufferedReceiver:
         del self.buf[:size]
         return result
 
-    async def receive_byte(self):
+    async def receive_byte(self) -> int:
         if self.buf:
             await trio.sleep(0)
         else:
@@ -38,7 +38,7 @@ class BufferedReceiver:
             raise EOFError
         self.buf.extend(tmp)
 
-    async def receive_varint(self, limit):
+    async def receive_varint(self, limit: int) -> int:
         shift = 0
         result = 0
         byte = await self.receive_byte()
@@ -67,24 +67,24 @@ class BufferedReceiver:
 
         return result
 
-    async def receive_bytearray(self, limit):
+    async def receive_bytearray(self, limit: int) -> bytearray:
         size = await self.receive_varint(limit)
         return await self.receive_exactly(size)
 
 
-def write_varint(buf, i):
+def write_varint(buf: bytearray, i: int):
     while i > 127:
         buf.append(128 + (i & 127))
         i >>= 7
     buf.append(i)
 
 
-def write_bytearray(buf, data):
+def write_bytearray(buf: bytearray, data: Union[bytes, bytearray]):
     write_varint(buf, len(data))
     buf.extend(data)
 
 
-def attr_varint(limit_var):
+def attr_varint(limit_var: str):
     return attr.ib(
         type=int,
         metadata={
@@ -96,7 +96,7 @@ def attr_varint(limit_var):
     )
 
 
-def attr_bytearray(limit_var):
+def attr_bytearray(limit_var: str):
     return attr.ib(
         type=Union[bytes, bytearray],
         metadata={

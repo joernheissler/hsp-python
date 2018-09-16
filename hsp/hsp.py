@@ -9,17 +9,6 @@ from .stream import BufferedReceiver
 class HspConnection:
     stream = attr.ib()
 
-    # Called for each PING command with the message as argument.
-    # Must be an async function, or None.
-    # If it raises any exception, the connection is terminated.
-    on_ping = attr.ib(default=None)
-
-    # Called for each DATA or DATA_ACK command with the message as argument.
-    # Must be an async function, or None.
-    #  - DataError: Send an ERROR or ERROR_UNDEF.
-    #  - Other Exceptions: Terminate the connection
-    on_data = attr.ib(default=None)
-
     # Maximum value of message type.
     max_type = attr.ib(default=1 << 16)
 
