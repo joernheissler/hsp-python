@@ -48,6 +48,7 @@ class HspConnection:
 
         self._receiver = BufferedReceiver(self.stream)
 
+        # XXX None to interrupt this? Or change queue impl. to finish the generator.
         self.received_data = trio.Queue(self.receive_queue_size)
 
     async def run(self, *, task_status=trio.TASK_STATUS_IGNORED):

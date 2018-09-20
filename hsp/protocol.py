@@ -78,10 +78,12 @@ class HspUndefinedError(HspError):
 @attr.s
 class HspProtocol:
     hsp = attr.ib()
-    messages = attr.ib(type=HspData)
+    messages = attr.ib(type=HspData)  # XXX allow multiple classes
     handler = attr.ib(type=object)
     direction = attr.ib(type=Direction)
 
+    # XXX API to change the handlers?
+    # And clean up that horrible code a bit!!
     def __attrs_post_init__(self):
         subs = {
             sub
@@ -125,12 +127,23 @@ class HspProtocol:
         else:
             raise msg.get_error_cls(error.error_code).decode(error.error_data)
 
-    async def recv(self):
-        async for msg in self.hsp.received_data():
+    async def recv(self, nursery):
+        async for msg in self.hsp.received_data:
             cls, cb = self.callbacks[msg.msg_type]
             try:
-                await cb(cls.decode(msg.payload, msg.msg_id))
+                coro = await cb(cls.decode(msg.payload, msg.msg_id))
+                if coro is None:
+                    msg.send_ack()
+                elif inspect.iscoroutine(coro):
+                    nursery.start_soon(self._delayed_recv, msg, coro)
+                else:
+                    raise TypeError(type(coro))
             except HspError as err:
                 msg.send_error(err.ERROR_CODE, err.encoded)
-            else:
-                msg.send_ack()
+
+    async def _delayed_recv(self, msg, coro):
+        try:
+            await coro
+            msg.send_ack()
+        except HspError as err:
+            msg.send_error(err.ERROR_CODE, err.encoded)
