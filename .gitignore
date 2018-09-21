@@ -4,3 +4,7 @@ dist
 *.swp
 build
 *.pdf
+.coverage
+.tox
+.pytest_cache
+coverage_html_report

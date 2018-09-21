@@ -1,41 +1,9 @@
-import trio
 import attr
 from .stream import attr_varint, attr_bytearray, write_varint
 from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage
+from .utils import Future
 
 from typing import Optional, Union
-
-
-class Future:
-    def __init__(self):
-        self._done = trio.Event()
-        self._result = None
-        self._error = None
-
-    async def wait(self):
-        await self._done.wait()
-
-        if self._error:
-            raise self._error
-        else:
-            return self._result
-
-    def __await__(self):
-        return self.wait().__await__()
-
-    def set_result(self, result=None):
-        if self._done.is_set():
-            return
-
-        self._done.set()
-        self._result = result
-
-    def set_error(self, error):
-        if self._done.is_set():
-            return
-
-        self._done.set()
-        self._error = error
 
 
 @attr.s(cmp=False)
@@ -96,7 +64,7 @@ class HspMessage:
             self._send_result.set_result()
 
     def send(self):
-        if self._send_result:
+        if hasattr(self, '_send_result'):
             raise RuntimeError('Already sent')
 
         self._send_result = Future()
@@ -138,10 +106,10 @@ class Data(HspMessage):
     async def handle(self):
         await self.hsp.received_data.put(self)
 
-    async def send_ack(self):
+    def send_ack(self):
         pass
 
-    async def send_error(self, error):
+    def send_error(self, error):
         pass
 
 

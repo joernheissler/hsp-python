@@ -1,5 +1,6 @@
 import trio
 import attr
+import logging
 
 from typing import Union
 
@@ -35,7 +36,9 @@ class BufferedReceiver:
     async def _receive_more(self):
         tmp = await self.stream.receive_some(4096)
         if not tmp:
+            logging.debug('EOF')
             raise EOFError
+        logging.debug('Received: ' + tmp.hex())
         self.buf.extend(tmp)
 
     async def receive_varint(self, limit: int) -> int:

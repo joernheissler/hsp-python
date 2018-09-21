@@ -33,12 +33,14 @@ class HspData(metaclass=ABCMeta):
     @property
     @abstractmethod
     def encoded(self) -> bytes:
-        pass
+        """
+        """
 
     @classmethod
     @abstractmethod
     def decode(cls, buf: bytearray, msg_id: Optional[int]=None) -> "HspData":
-        pass
+        """
+        """
 
     @classmethod
     def handler(cls, func):
@@ -53,18 +55,20 @@ class HspData(metaclass=ABCMeta):
         return func
 
 
-class HspError(metaclass=ABCMeta):
+class HspError(Exception, metaclass=ABCMeta):
     ERROR_CODE = None
 
     @property
     @abstractmethod
     def encoded(self) -> bytes:
-        pass
+        """
+        """
 
     @classmethod
     @abstractmethod
     def decode(cls, buf: bytearray) -> "HspError":
-        pass
+        """
+        """
 
 
 class HspUndefinedError(HspError):
@@ -93,7 +97,7 @@ class HspProtocol:
 
         self._types = {}
 
-        for member in inspect.getmembers(self.handler):
+        for name, member in inspect.getmembers(self.handler):
             cls = getattr(member, '_hsp_data_class', None)
 
             if cls not in subs:
@@ -105,7 +109,7 @@ class HspProtocol:
 
             self._types[cls.MSG_TYPE] = cls, member
 
-        subs -= {cls for cls, __ in self._types.items()}
+        subs -= {cls for cls, __ in self._types.values()}
 
         if subs:
             raise Exception('Unhandled message types: {}'.format(subs))
@@ -114,9 +118,9 @@ class HspProtocol:
     # Some DATA are more important than others, especially on multiplexed connections.
     # For Multiplex, maybe create scheduler with one queue per logical connection and round robin on all queues?
     async def send(self, msg: HspData, wait: Optional[bool]=None):
-        result = await self.hsp.send(msg.MSG_TYPE, msg.encoded, msg.NEED_RESP)
+        result = await self.hsp.send(msg.MSG_TYPE, msg.encoded, msg.NEED_ACK)
 
-        if not (msg.NEED_RESP if wait is None else wait):
+        if not (msg.NEED_ACK if wait is None else wait):
             return
 
         error = await result
@@ -129,7 +133,7 @@ class HspProtocol:
 
     async def recv(self, nursery):
         async for msg in self.hsp.received_data:
-            cls, cb = self.callbacks[msg.msg_type]
+            cls, cb = self._types[msg.msg_type]
             try:
                 coro = await cb(cls.decode(msg.payload, msg.msg_id))
                 if coro is None:

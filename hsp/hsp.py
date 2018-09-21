@@ -70,7 +70,7 @@ class HspConnection:
             while True:
                 await trio.sleep(self.ping_interval)
                 with trio.fail_after(self.ping_timeout):
-                    await self.ping()
+                    await (await self.ping())
         except trio.TooSlowError as ex:
             raise exception.PingTimeout() from ex
 
@@ -115,5 +115,5 @@ class HspConnection:
 
         return msg.send()
 
-    async def ping(self, *, task_status=trio.TASK_STATUS_IGNORED):
-        return await messages.Ping(self).send(task_status)
+    async def ping(self):
+        return messages.Ping(self).send()
