@@ -47,6 +47,9 @@ class PingQueue:
     def get(self):
         return self._queue[0]
 
+    def __len__(self):
+        return len(self._queue)
+
 
 class DataQueue:
     def __init__(self, max_msg_id):

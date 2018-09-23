@@ -1,4 +1,5 @@
 import trio
+from .exception import InvalidOperation
 
 
 class Future:
@@ -20,14 +21,17 @@ class Future:
 
     def set_result(self, result=None):
         if self._done.is_set():
-            return
+            raise InvalidOperation('Already set')
 
         self._done.set()
         self._result = result
 
     def set_error(self, error):
         if self._done.is_set():
-            return
+            raise InvalidOperation('Already set')
 
         self._done.set()
         self._error = error
+
+    def isset(self):
+        return self._done.is_set()

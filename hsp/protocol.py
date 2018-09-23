@@ -72,7 +72,9 @@ class HspError(Exception, metaclass=ABCMeta):
 
 
 class HspUndefinedError(HspError):
-    encoded = b''
+    @property
+    def encoded(self) -> bytes:
+        return b''
 
     @classmethod
     def decode(cls, buf):
@@ -127,7 +129,7 @@ class HspProtocol:
         if not error:
             return
         elif error.error_code is None:
-            raise HspUndefinedError()
+            raise HspUndefinedError.decode(b'')
         else:
             raise msg.get_error_cls(error.error_code).decode(error.error_data)
 

@@ -5,7 +5,7 @@ import trio.testing
 import json
 
 from hsp import HspConnection
-from hsp.protocol import Direction, HspData, HspError, HspProtocol
+from hsp.protocol import Direction, HspData, HspError, HspProtocol, HspUndefinedError
 from hsp.utils import Future
 
 
@@ -63,7 +63,7 @@ class OtherMessage(ExampleProtocol):
 
     @property
     def encoded(self):
-        return b'Flag: ' + [b'False', b'True'][self.flag]
+        return 'Flag: {!r}'.format(self.flag).encode()
 
     @classmethod
     def decode(cls, buf, msg_id):
@@ -71,6 +71,9 @@ class OtherMessage(ExampleProtocol):
             msg = cls(True)
         elif buf == b'Flag: False':
             msg = cls(False)
+        else:
+            msg = cls(None)
+
         msg.msg_id = msg_id
         return msg
 
@@ -113,6 +116,8 @@ class Client:
         await self.proto.send(OtherMessage(True))
         with pytest.raises(SomeError):
             await self.proto.send(OtherMessage(False))
+        with pytest.raises(HspUndefinedError):
+            await self.proto.send(OtherMessage(None))
         self.nursery.cancel_scope.cancel()
 
     @SomeMessage.handler
@@ -158,14 +163,25 @@ class Server:
         if msg.flag:
             return
 
-        return self.other_delayed(msg)
+        if msg.flag is False:
+            return self.other_delayed(msg)
+
+        raise HspUndefinedError()
 
     async def other_delayed(self, msg):
         raise SomeError()
 
 
+async def tcp_socketpair():
+    listeners = await trio.open_tcp_listeners(port=0, host='127.0.0.1')
+    assert len(listeners) == 1
+    async with listeners[0] as listener:
+        return await trio.testing.open_stream_to_socket_listener(listener), await listener.accept()
+
+
 async def bigtest():
     client_stream, server_stream = trio.testing.lockstep_stream_pair()
+    # client_stream, server_stream = await tcp_socketpair()
 
     client = Client(client_stream)
     server = Server(server_stream)
