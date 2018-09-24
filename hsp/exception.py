@@ -7,6 +7,12 @@ class InvalidOperation(Exception):
     """
 
 
+class QueueFull(Exception):
+    """
+    Raised when a queue is full and more items cannot be added.
+    """
+
+
 class ProtocolError(Exception):
     """
     Peer violated the protocol.
