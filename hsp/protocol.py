@@ -125,13 +125,13 @@ class HspProtocol:
         if not (msg.NEED_ACK if wait is None else wait):
             return
 
-        error = await result
-        if not error:
+        response = await result
+        if not response or not response.IS_ERROR:
             return
-        elif error.error_code is None:
+        elif response.error_code is None:
             raise HspUndefinedError.decode(b'')
         else:
-            raise msg.get_error_cls(error.error_code).decode(error.error_data)
+            raise msg.get_error_cls(response.error_code).decode(response.error_data)
 
     async def recv(self, nursery):
         async for msg in self.hsp.received_data:

@@ -1,7 +1,7 @@
 import trio
 import attr
 
-from . import messages, queue, exception
+from . import messages, queue, exception, utils
 from .stream import BufferedReceiver
 
 
@@ -41,7 +41,7 @@ class HspConnection:
         self._ping_queue = queue.PingQueue()
 
         # Map from msg_id to DataAck messages that are waiting for a reply.
-        self._data_queue = queue.DataQueue(self.max_msg_id)
+        self._data_queue = utils.UniqueItemMap(self.max_msg_id)
 
         # Priority queue of outgoing messages  XXX should be bounded to prevent DoS with PINGs or DATA_ACKs.
         self._send_queue = queue.SendQueue()

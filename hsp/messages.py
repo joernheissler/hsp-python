@@ -125,10 +125,12 @@ class DataAck(HspMessage):
     prio = attr.ib(default=0)
 
     def _prepare_send(self):
-        self.hsp._data_queue.add(self)
+        if self.msg_id is not None:
+            raise RuntimeError('Cannot add a message with a message ID')
+        self.msg_id = self.hsp._data_queue.add(self)
 
     def _finish_send(self):
-        self.hsp._data_queue.pop(self)
+        del self.hsp._data_queue[self.msg_id]
 
     async def handle(self):
         await self.hsp.received_data.put(self)
@@ -141,38 +143,6 @@ class DataAck(HspMessage):
             return ErrorUndef(self.hsp, self.msg_id).send()
         else:
             return Error(self.hsp, self.msg_id, error_code, error_data).send()
-
-
-@attr.s(cmp=False)
-class Ack(HspMessage):
-    CMD = 2
-    PRIO = 1
-
-    msg_id = attr_varint('max_msg_id')
-
-    async def handle(self):
-        try:
-            msg = self.hsp._data_queue.get(self.msg_id)
-        except KeyError as ex:
-            raise UnexpectedAck(self.msg_id) from ex
-        msg._set_response(None)
-
-
-@attr.s(cmp=False)
-class Error(HspMessage):
-    CMD = 3
-    PRIO = 1
-
-    msg_id = attr_varint('max_msg_id')
-    error_code = attr_varint('max_error_code')
-    error_data = attr_bytearray('max_error_length')
-
-    async def handle(self):
-        try:
-            msg = self.hsp._data_queue.get(self.msg_id)
-        except KeyError as ex:
-            raise UnexpectedAck(self.msg_id) from ex
-        msg._set_response(self)
 
 
 @attr.s(cmp=False)
@@ -206,18 +176,36 @@ class Pong(HspMessage):
 
 
 @attr.s(cmp=False)
-class ErrorUndef(HspMessage):
-    CMD = 6
+class DataResp:
     PRIO = 1
-    error_code = None
-    error_data = None
-
     msg_id = attr_varint('max_msg_id')
 
     async def handle(self):
         try:
-            msg = self.hsp._data_queue.get(self.msg_id)
+            msg = self.hsp._data_queue[self.msg_id]
         except KeyError as ex:
             raise UnexpectedAck(self.msg_id) from ex
 
         msg._set_response(self)
+
+
+@attr.s(cmp=False)
+class Ack(HspMessage, DataResp):
+    CMD = 2
+    IS_ERROR = False
+
+
+@attr.s(cmp=False)
+class Error(HspMessage, DataResp):
+    CMD = 3
+    IS_ERROR = True
+    error_code = attr_varint('max_error_code')
+    error_data = attr_bytearray('max_error_length')
+
+
+@attr.s(cmp=False)
+class ErrorUndef(HspMessage, DataResp):
+    CMD = 6
+    IS_ERROR = True
+    error_code = None
+    error_data = None
