@@ -59,13 +59,3 @@ class PingTimeout(NetworkError):
     """
     Peer didn't respond to a PING fast enough.
     """
-
-
-@attr.s(cmp=False)
-class DataError(Exception):
-    """
-    Can be thrown from data handlers to return an ERROR instead of an ACK.
-    """
-
-    error_code = attr.ib(default=None)
-    error = attr.ib(default=None)
