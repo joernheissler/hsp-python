@@ -1,4 +1,5 @@
 import attr
+import trio
 from .stream import attr_varint, attr_bytearray, write_varint
 from .exception import UnexpectedPong, UnexpectedAck, IncompleteMessage
 from .utils import Future
@@ -63,19 +64,20 @@ class HspMessage:
         if not self.NEED_RESP:
             self._send_result.set_result()
 
-    def send(self):
+    async def send(self):
         if hasattr(self, '_send_result'):
             raise RuntimeError('Already sent')
 
         self._send_result = Future()
         self._written = Future()
-        self.hsp.nursery.start_soon(self._send_task)
+        await self.hsp.nursery.start(self._send_task)
         return self._send_result
 
-    async def _send_task(self):
+    async def _send_task(self, *, task_status=trio.TASK_STATUS_IGNORED):
         self._prepare_send()
         try:
             self.hsp._send_queue.put((self.PRIO, self.prio), self._write)
+            task_status.started()
             await self._written
             await self._send_result
         except BaseException as ex:
@@ -106,10 +108,10 @@ class Data(HspMessage):
     async def handle(self):
         await self.hsp.received_data.put(self)
 
-    def send_ack(self):
+    async def send_ack(self):
         pass
 
-    def send_error(self, error):
+    async def send_error(self, error):
         pass
 
 
@@ -135,14 +137,14 @@ class DataAck(HspMessage):
     async def handle(self):
         await self.hsp.received_data.put(self)
 
-    def send_ack(self):
-        return Ack(self.hsp, self.msg_id).send()
+    async def send_ack(self):
+        return await Ack(self.hsp, self.msg_id).send()
 
-    def send_error(self, error_code: Optional[int]=None, error_data: Optional[Union[bytes, bytearray]]=None):
+    async def send_error(self, error_code: Optional[int]=None, error_data: Optional[Union[bytes, bytearray]]=None):
         if error_code is None:
-            return ErrorUndef(self.hsp, self.msg_id).send()
+            return await ErrorUndef(self.hsp, self.msg_id).send()
         else:
-            return Error(self.hsp, self.msg_id, error_code, error_data).send()
+            return await Error(self.hsp, self.msg_id, error_code, error_data).send()
 
 
 @attr.s(cmp=False)
@@ -158,7 +160,7 @@ class Ping(HspMessage):
         self.hsp._ping_queue.remove(self)
 
     async def handle(self):
-        Pong(self.hsp).send()
+        await Pong(self.hsp).send()
 
 
 @attr.s(cmp=False)

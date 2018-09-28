@@ -121,7 +121,7 @@ class HspProtocol:
     # Some DATA are more important than others, especially on multiplexed connections.
     # For Multiplex, maybe create scheduler with one queue per logical connection and round robin on all queues?
     async def send(self, msg: HspData, *, wait: Optional[bool]=None, prio: int=0):
-        logging.warning('Sending protocol message: %s', msg)
+        logging.debug('Sending protocol message: %s', msg)
         result = await self.hsp.send(msg.MSG_TYPE, msg.encoded, msg.NEED_ACK, prio)
 
         if not (msg.NEED_ACK if wait is None else wait):
@@ -143,17 +143,17 @@ class HspProtocol:
                 logging.debug('Received protocol message: %s', decoded)
                 coro = await cb(decoded)
                 if coro is None:
-                    msg.send_ack()
+                    await msg.send_ack()
                 elif inspect.iscoroutine(coro):
                     nursery.start_soon(self._delayed_recv, msg, coro)
                 else:
                     raise TypeError(type(coro))
             except HspError as err:
-                msg.send_error(err.ERROR_CODE, err.encoded)
+                await msg.send_error(err.ERROR_CODE, err.encoded)
 
     async def _delayed_recv(self, msg, coro):
         try:
             await coro
-            msg.send_ack()
+            await msg.send_ack()
         except HspError as err:
-            msg.send_error(err.ERROR_CODE, err.encoded)
+            await msg.send_error(err.ERROR_CODE, err.encoded)

@@ -113,7 +113,7 @@ class HspConnection:
         else:
             msg = messages.Data(self, msg_type, payload, prio)
 
-        return msg.send()
+        return await msg.send()
 
     async def ping(self):
-        return messages.Ping(self).send()
+        return await messages.Ping(self).send()
