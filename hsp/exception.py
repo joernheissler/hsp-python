@@ -1,6 +1,3 @@
-import attr
-
-
 class InvalidOperation(Exception):
     """
     Raised when an operation is invalid in the current state.

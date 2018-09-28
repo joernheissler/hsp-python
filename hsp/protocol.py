@@ -3,6 +3,7 @@ from abc import ABCMeta, abstractmethod
 from typing import Optional
 from enum import IntEnum
 import inspect
+import logging
 
 
 class Direction(IntEnum):
@@ -119,8 +120,9 @@ class HspProtocol:
     # XXX still need priorities. ACK/PING/PONG/ERROR must come before all DATA(_ACK).
     # Some DATA are more important than others, especially on multiplexed connections.
     # For Multiplex, maybe create scheduler with one queue per logical connection and round robin on all queues?
-    async def send(self, msg: HspData, wait: Optional[bool]=None):
-        result = await self.hsp.send(msg.MSG_TYPE, msg.encoded, msg.NEED_ACK)
+    async def send(self, msg: HspData, *, wait: Optional[bool]=None, prio: int=0):
+        logging.warning('Sending protocol message: %s', msg)
+        result = await self.hsp.send(msg.MSG_TYPE, msg.encoded, msg.NEED_ACK, prio)
 
         if not (msg.NEED_ACK if wait is None else wait):
             return
@@ -137,7 +139,9 @@ class HspProtocol:
         async for msg in self.hsp.received_data:
             cls, cb = self._types[msg.msg_type]
             try:
-                coro = await cb(cls.decode(msg.payload, msg.msg_id))
+                decoded = cls.decode(msg.payload, msg.msg_id)
+                logging.debug('Received protocol message: %s', decoded)
+                coro = await cb(decoded)
                 if coro is None:
                     msg.send_ack()
                 elif inspect.iscoroutine(coro):

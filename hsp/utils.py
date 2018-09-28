@@ -72,3 +72,6 @@ class UniqueItemMap:
 
     def __contains__(self, item_id):
         return item_id in self._items
+
+    def values(self):
+        return self._items.values()

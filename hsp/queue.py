@@ -1,7 +1,6 @@
 import trio
 from heapq import heappush, heappop
 from collections import deque
-from random import randint
 
 
 class SendQueue:
