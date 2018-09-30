@@ -4,6 +4,7 @@ from typing import Optional
 import logging
 from .utils import Exchange
 from async_generator import async_generator, yield_, asynccontextmanager
+import trio
 
 
 class HspData(metaclass=ABCMeta):
@@ -112,16 +113,15 @@ class HspExchange:
             decoded = cls.decode(msg.payload, msg.msg_id)
             logging.debug('Received protocol message: %s', decoded)
 
-            async def coro():
-                # task_status.started()
+            async def coro(*, task_status=trio.TASK_STATUS_IGNORED):
                 try:
-                    await func(decoded, *args)
+                    await func(decoded, *args, task_status=task_status)
                 except HspError as err:
                     await msg.send_error(err.ERROR_CODE, err.encoded)
                 else:
                     await msg.send_ack()
 
-            nursery.start_soon(coro)
+            await nursery.start(coro)
 
     async def send(self, msg: HspData, *, wait: Optional[bool]=None, prio: int=0):
         logging.debug('Sending protocol message: %s', msg)

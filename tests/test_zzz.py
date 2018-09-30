@@ -150,7 +150,8 @@ class Server:
             async with exch.recv(OtherMessage) as msg:
                 assert msg.flag is True
 
-            async def other_delayed(msg):
+            async def other_delayed(msg, *, task_status=trio.TASK_STATUS_IGNORED):
+                task_status.started()
                 assert msg.flag is False
                 raise SomeError()
 
