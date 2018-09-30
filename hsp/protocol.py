@@ -1,23 +1,14 @@
 import attr
 from abc import ABCMeta, abstractmethod
 from typing import Optional
-# from enum import IntEnum
-# import inspect
 import logging
 from .utils import Exchange
 from async_generator import async_generator, yield_, asynccontextmanager
 
 
-# class Direction(IntEnum):
-#     TO_CLIENT = 1
-#     TO_SERVER = 2
-#     BOTH = 3
-
-
 class HspData(metaclass=ABCMeta):
     NEED_ACK = False
     MSG_TYPE = None
-    # DIRECTION = None
 
     # Iterable of HspError classes that may be returned for this message type
     ERRORS = set()
@@ -44,18 +35,6 @@ class HspData(metaclass=ABCMeta):
     def decode(cls, buf: bytearray, msg_id: Optional[int]=None) -> "HspData":
         """
         """
-
-#   @classmethod
-#   def handler(cls, func):
-#       """
-#       Function decorator to register handler functions for specific message types.
-
-#       @MessageType.handler
-#       def handle(self, msg):
-#           pass
-#       """
-#       func._hsp_data_class = cls
-#       return func
 
 
 class HspError(Exception, metaclass=ABCMeta):
@@ -136,80 +115,3 @@ class HspExchange:
             raise HspUndefinedError.decode(b'')
         else:
             raise msg.get_error_cls(response.error_code).decode(response.error_data)
-
-
-# @attr.s(cmp=False)
-# class HspProtocol:
-#     hsp = attr.ib()
-#     messages = attr.ib(type=HspData)  # XXX allow multiple classes
-#     handler = attr.ib(type=object)
-#     direction = attr.ib(type=Direction)
-#
-#     # XXX API to change the handlers?
-#     # And clean up that horrible code a bit!!
-#     def __attrs_post_init__(self):
-#         subs = {
-#             sub
-#             for sub in self.messages.__subclasses__()
-#             if sub.DIRECTION & self.direction
-#         }
-#
-#         self._types = {}
-#
-#         for name, member in inspect.getmembers(self.handler):
-#             cls = getattr(member, '_hsp_data_class', None)
-#
-#             if cls not in subs:
-#                 continue
-#
-#             if cls.MSG_TYPE in self._types:
-#                 raise Exception('Duplicate message type {} ({}/{}, {}/{})'.format(
-#                     cls.MSG_TYPE, cls, member, *self._types[cls.MSG_TYPE]))
-#
-#             self._types[cls.MSG_TYPE] = cls, member
-#
-#         subs -= {cls for cls, __ in self._types.values()}
-#
-#         if subs:
-#             raise Exception('Unhandled message types: {}'.format(subs))
-#
-#     # XXX still need priorities. ACK/PING/PONG/ERROR must come before all DATA(_ACK).
-#     # Some DATA are more important than others, especially on multiplexed connections.
-#     # For Multiplex, maybe create scheduler with one queue per logical connection and round robin on all queues?
-#     async def send(self, msg: HspData, *, wait: Optional[bool]=None, prio: int=0):
-#         logging.debug('Sending protocol message: %s', msg)
-#         result = await self.hsp.send(msg.MSG_TYPE, msg.encoded, msg.NEED_ACK, prio)
-#
-#         if not (msg.NEED_ACK if wait is None else wait):
-#             return
-#
-#         response = await result
-#         if not response or not response.IS_ERROR:
-#             return
-#         elif response.error_code is None:
-#             raise HspUndefinedError.decode(b'')
-#         else:
-#             raise msg.get_error_cls(response.error_code).decode(response.error_data)
-#
-#     async def recv(self, nursery):
-#         async for msg in self.hsp.received_data:
-#             cls, cb = self._types[msg.msg_type]
-#             try:
-#                 decoded = cls.decode(msg.payload, msg.msg_id)
-#                 logging.debug('Received protocol message: %s', decoded)
-#                 coro = await cb(decoded)
-#                 if coro is None:
-#                     await msg.send_ack()
-#                 elif inspect.iscoroutine(coro):
-#                     nursery.start_soon(self._delayed_recv, msg, coro)
-#                 else:
-#                     raise TypeError(type(coro))
-#             except HspError as err:
-#                 await msg.send_error(err.ERROR_CODE, err.encoded)
-#
-#     async def _delayed_recv(self, msg, coro):
-#         try:
-#             await coro
-#             await msg.send_ack()
-#         except HspError as err:
-#             await msg.send_error(err.ERROR_CODE, err.encoded)
