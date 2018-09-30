@@ -5,8 +5,7 @@ import trio.testing
 import json
 
 from hsp import HspConnection
-from hsp.protocol import Direction, HspData, HspError, HspProtocol, HspUndefinedError
-from hsp.utils import Future
+from hsp.protocol import HspData, HspError, HspExchange, HspUndefinedError
 
 
 class ExampleProtocol(HspData):
@@ -30,7 +29,7 @@ class SomeError(HspError):
 class SomeMessage(ExampleProtocol):
     NEED_ACK = False
     MSG_TYPE = 17005
-    DIRECTION = Direction.BOTH
+#   DIRECTION = Direction.BOTH
 
     foo = attr.ib()
     bar = attr.ib()
@@ -53,7 +52,7 @@ class SomeMessage(ExampleProtocol):
 class OtherMessage(ExampleProtocol):
     NEED_ACK = True
     MSG_TYPE = 42
-    DIRECTION = Direction.TO_SERVER
+#   DIRECTION = Direction.TO_SERVER
 
     ERRORS = {
         SomeError,
@@ -82,10 +81,6 @@ class OtherMessage(ExampleProtocol):
 class Client:
     stream = attr.ib()
 
-    def __attrs_post_init__(self):
-        self.hsp = HspConnection(self.stream)
-        self.proto = HspProtocol(self.hsp, ExampleProtocol, self, Direction.TO_CLIENT)
-
     async def run(self):
         try:
             with trio.fail_after(10) as cancel_scope:
@@ -93,46 +88,38 @@ class Client:
                 await self._run()
         except EOFError:
             pass
-        except trio.TooSlowError:
-            pass
-        except trio.MultiError:
-            pass
-        except Exception as ex:
-            raise
+#       except trio.TooSlowError:
+#           pass
+#       except trio.MultiError:
+#           pass
+#       except Exception as ex:
+#           raise
 
     async def _run(self):
-        async with trio.open_nursery() as self.nursery:
-            await self.nursery.start(self.hsp.run)
-            self.nursery.start_soon(self.proto.recv, self.nursery)
-            self.nursery.start_soon(self._task)
+        hsp = HspConnection(self.stream)
+        exch = HspExchange(hsp)
 
-    async def _task(self):
-        await (await self.hsp.ping())
-        self.got_some = Future()
-        await self.proto.send(SomeMessage('Hello', 1234))
-        msg = await self.got_some
-        assert msg.foo == 'Test'
-        assert msg.bar == 5678
-        await self.proto.send(OtherMessage(True))
-        with pytest.raises(SomeError):
-            await self.proto.send(OtherMessage(False))
-        with pytest.raises(HspUndefinedError):
-            await self.proto.send(OtherMessage(None))
-        self.nursery.cancel_scope.cancel()
+        async with trio.open_nursery() as nursery:
+            await nursery.start(hsp.run)
+            nursery.start_soon(exch.task)
 
-    @SomeMessage.handler
-    async def on_some(self, msg):
-        self.got_some.set_result(msg)
+            await (await hsp.ping())
+            await exch.send(SomeMessage('Hello', 1234))
+            async with exch.recv(SomeMessage) as msg:
+                assert msg.foo == 'Test'
+                assert msg.bar == 5678
+            await exch.send(OtherMessage(True))
+            with pytest.raises(SomeError):
+                await exch.send(OtherMessage(False))
+            with pytest.raises(HspUndefinedError):
+                await exch.send(OtherMessage(None))
+            nursery.cancel_scope.cancel()
 
 
 @attr.s
 class Server:
     stream = attr.ib()
 
-    def __attrs_post_init__(self):
-        self.hsp = HspConnection(self.stream)
-        self.proto = HspProtocol(self.hsp, ExampleProtocol, self, Direction.TO_SERVER)
-
     async def run(self):
         try:
             with trio.fail_after(10) as cancel_scope:
@@ -140,36 +127,38 @@ class Server:
                 await self._run()
         except EOFError:
             pass
-        except trio.TooSlowError:
-            pass
-        except trio.MultiError:
-            pass
-        except Exception as ex:
-            raise
+#       except trio.TooSlowError:
+#           pass
+#       except trio.MultiError:
+#           pass
+#       except Exception as ex:
+#           raise
 
     async def _run(self):
+        hsp = HspConnection(self.stream)
+        exch = HspExchange(hsp)
+
         async with trio.open_nursery() as nursery:
-            await nursery.start(self.hsp.run)
-            nursery.start_soon(self.proto.recv, nursery)
+            await nursery.start(hsp.run)
+            nursery.start_soon(exch.task)
 
-    @SomeMessage.handler
-    async def on_some(self, msg):
-        assert msg.foo == 'Hello'
-        assert msg.bar == 1234
-        await self.proto.send(SomeMessage('Test', 5678))
+            async with exch.recv(SomeMessage) as msg:
+                assert msg.foo == 'Hello'
+                assert msg.bar == 1234
+                await exch.send(SomeMessage('Test', 5678))
 
-    @OtherMessage.handler
-    async def on_other(self, msg):
-        if msg.flag:
-            return
+            async with exch.recv(OtherMessage) as msg:
+                assert msg.flag is True
 
-        if msg.flag is False:
-            return self.other_delayed(msg)
+            async def other_delayed(msg):
+                assert msg.flag is False
+                raise SomeError()
 
-        raise HspUndefinedError()
+            await exch.recv_async(OtherMessage, nursery, other_delayed)
 
-    async def other_delayed(self, msg):
-        raise SomeError()
+            async with exch.recv(OtherMessage) as msg:
+                assert msg.flag is None
+                raise HspUndefinedError()
 
 
 async def tcp_socketpair():

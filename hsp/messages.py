@@ -80,8 +80,8 @@ class HspMessage:
             task_status.started()
             await self._written
             await self._send_result
-        except BaseException as ex:
-            self._send_result.set_error(ex)
+        # except BaseException as ex:
+        #     self._send_result.set_error(ex)
         finally:
             self._finish_send()
 

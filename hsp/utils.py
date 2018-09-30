@@ -1,3 +1,4 @@
+from async_generator import async_generator, yield_, asynccontextmanager
 import attr
 import trio
 from outcome import Value
@@ -78,29 +79,8 @@ class UniqueItemMap:
     def values(self):
         return self._items.values()
 
+
 _default = object()
-
-
-@attr.s(cmp=False)
-class _Receiver:
-    _exchange = attr.ib()
-    _key = attr.ib()
-
-    def _abort(self, __):
-        del self._exchange._receivers[self._key]
-        return trio.hazmat.Abort.SUCCEEDED
-
-    async def __aenter__(self):
-        if self._key in self._exchange._receivers:
-            raise DuplicateKeyError(self._key)
-
-        self._exchange._receivers[self._key] = trio.hazmat.current_task()
-        return await trio.hazmat.wait_task_rescheduled(self._abort)
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        if self._exchange._sender:
-            trio.hazmat.reschedule(self._exchange._sender)
-            self._exchange._sender = None
 
 
 @attr.s(cmp=False)
@@ -108,16 +88,25 @@ class Exchange:
     _receivers = attr.ib(factory=dict, init=False)
     _sender = attr.ib(default=None, init=False)
 
-    def recv(self, key):
-        return _Receiver(self, key)
+    @asynccontextmanager
+    @async_generator
+    async def recv(self, key):
+        if key in self._receivers:
+            raise DuplicateKeyError(key)
+        self._receivers[key] = trio.hazmat.current_task()
+        try:
+            def abort(__):
+                del self._receivers[key]
+                return trio.hazmat.Abort.SUCCEEDED
+
+            await yield_(await trio.hazmat.wait_task_rescheduled(abort))
+        finally:
+            if self._sender:
+                trio.hazmat.reschedule(self._sender)
+                self._sender = None
 
     def recv_default(self):
-        return _Receiver(self, _default)
-
-    def _abort(self, __):
-        assert self._sender
-        self._sender = None
-        return trio.hazmat.Abort.SUCCEEDED
+        return self.recv(_default)
 
     async def send(self, key, value):
         if self._sender:
@@ -129,4 +118,10 @@ class Exchange:
 
         trio.hazmat.reschedule(receiver, Value(value))
         self._sender = trio.hazmat.current_task()
-        await trio.hazmat.wait_task_rescheduled(self._abort)
+
+        def abort(__):
+            assert self._sender
+            self._sender = None
+            return trio.hazmat.Abort.SUCCEEDED
+
+        await trio.hazmat.wait_task_rescheduled(abort)
