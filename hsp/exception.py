@@ -56,3 +56,9 @@ class PingTimeout(NetworkError):
     """
     Peer didn't respond to a PING fast enough.
     """
+
+
+class DuplicateKeyError(Exception):
+    """
+    Key is allowed only once.
+    """

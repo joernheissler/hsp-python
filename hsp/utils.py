@@ -1,5 +1,7 @@
+import attr
 import trio
-from .exception import InvalidOperation, QueueFull
+from outcome import Value
+from .exception import InvalidOperation, QueueFull, DuplicateKeyError
 from collections import deque
 
 
@@ -75,3 +77,56 @@ class UniqueItemMap:
 
     def values(self):
         return self._items.values()
+
+_default = object()
+
+
+@attr.s(cmp=False)
+class _Receiver:
+    _exchange = attr.ib()
+    _key = attr.ib()
+
+    def _abort(self, __):
+        del self._exchange._receivers[self._key]
+        return trio.hazmat.Abort.SUCCEEDED
+
+    async def __aenter__(self):
+        if self._key in self._exchange._receivers:
+            raise DuplicateKeyError(self._key)
+
+        self._exchange._receivers[self._key] = trio.hazmat.current_task()
+        return await trio.hazmat.wait_task_rescheduled(self._abort)
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        if self._exchange._sender:
+            trio.hazmat.reschedule(self._exchange._sender)
+            self._exchange._sender = None
+
+
+@attr.s(cmp=False)
+class Exchange:
+    _receivers = attr.ib(factory=dict, init=False)
+    _sender = attr.ib(default=None, init=False)
+
+    def recv(self, key):
+        return _Receiver(self, key)
+
+    def recv_default(self):
+        return _Receiver(self, _default)
+
+    def _abort(self, __):
+        assert self._sender
+        self._sender = None
+        return trio.hazmat.Abort.SUCCEEDED
+
+    async def send(self, key, value):
+        if self._sender:
+            raise RuntimeError('Send already running')
+        try:
+            receiver = self._receivers.pop(key)
+        except KeyError:
+            receiver = self._receivers.pop(_default)
+
+        trio.hazmat.reschedule(receiver, Value(value))
+        self._sender = trio.hazmat.current_task()
+        await trio.hazmat.wait_task_rescheduled(self._abort)
