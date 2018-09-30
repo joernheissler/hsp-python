@@ -65,6 +65,28 @@ class HspUndefinedError(HspError):
 
 @attr.s(cmp=False)
 class HspExchange:
+    """
+    `recv` and `recv_async` install a request for a specific message type and then
+    block until a message with this type is received by `task`.
+    As long as the `recv` body is running, `task` stays blocked. After the context manager
+    finished, `task` is unblocked, but won't continue before the next trio checkpoint.
+
+    If the `recv` body raises an HspError, this is returned to the sender. Else an ACK is returned.
+
+    To receive message types A and B, the code needs to look like this:
+        async with o.recv(A) as msg:
+            ...
+        # There must be no trio checkpoints here!
+
+        async with o.recv(B) as msg:
+            ...
+
+    Or to receive message types C and process them in the background:
+        while True:
+            await o.recv_async(C, nursery, func, args)
+            # Also, no trio checkpoints here!
+    """
+
     hsp = attr.ib()
     _exchange = attr.ib(factory=Exchange, init=False)
 

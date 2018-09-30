@@ -49,10 +49,10 @@ class HspMessage:
     @classmethod
     async def receive(cls, hsp):
         try:
-            return cls(hsp, *[
-                await recvfunc(hsp._receiver, getattr(hsp, limit_var))
-                for __, limit_var, recvfunc, __ in cls._fields()
-            ])
+            args = []
+            for __, limit_var, recvfunc, __ in cls._fields():
+                args.append(await recvfunc(hsp._receiver, getattr(hsp, limit_var)))
+            return cls(hsp, *args)
         except EOFError as ex:
             raise IncompleteMessage() from ex
 
