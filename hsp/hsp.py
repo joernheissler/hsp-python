@@ -84,7 +84,8 @@ class HspConnection:
             await msg.handle()
 
     async def _child_send(self):
-        while True:
+        quit = False
+        while not quit:
             buf = bytearray()
 
             # Wait until there might be space on the Stream.
@@ -93,15 +94,23 @@ class HspConnection:
             await self._send_queue.wait_nonempty()
 
             for writefunc in self._send_queue:
-                writefunc(buf)
+                if writefunc:
+                    writefunc(buf)
+                else:
+                    quit = True
+                    break
 
                 if len(buf) >= self.writer_chunk_size:
                     break
 
             await self.stream.send_all(buf)
 
-    def close(self):
+        # XXX or raise an exception?
         self.nursery.cancel_scope.cancel()
+
+    # XXX need some way to set a timeout here, then just close the stream
+    def close(self):
+        self._send_queue.put((3, 0), None)
 
     async def send(self, msg_type, payload, req_ack=False, prio=0):
         """
