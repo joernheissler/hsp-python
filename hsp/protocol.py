@@ -105,6 +105,7 @@ class HspExchange:
                 await yield_(decoded)
             except HspError as err:
                 await msg.send_error(err.ERROR_CODE, err.encoded)
+                raise
             else:
                 await msg.send_ack()
 
@@ -118,6 +119,7 @@ class HspExchange:
                     await func(decoded, *args, task_status=task_status)
                 except HspError as err:
                     await msg.send_error(err.ERROR_CODE, err.encoded)
+                    raise
                 else:
                     await msg.send_ack()
 
